@@ -27,4 +27,4 @@
 
 ## Handoff
 
-- [ ] H1. Publish the image digest to the homelab `add-mcp-gateway` change (tasks H2/R7) so the homelab wiring can pin it and deploy. **Pending the first push to `main`** (CI emits the digest); then hand it to homelab.
+- [~] H1. Image published to `ghcr.io/yoselabs/a2mcp` (repo: https://github.com/yoselabs/a2mcp, CI green). First `main` build digest: `sha256:ea9a06339fdc8dbaeb8403084944e66334d2ce289493b50fde632cd36c501630`. A `v0.1.0` release tag produces the semver-pinned `0.1.0` image for homelab to pin. **Remaining:** paste the release digest into the homelab `add-mcp-gateway` change (H2/R7) -- separate repo, done as a follow-up.
