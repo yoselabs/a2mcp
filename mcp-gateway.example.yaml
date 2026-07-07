@@ -1,0 +1,30 @@
+# mcp-gateway.example.yaml -- copy to mcp-gateway.yaml (homelab supplies the real one).
+#
+# Behaviour is 100% driven by this file. Adding a backend is a config edit, never code.
+# Tools are served under one MCP URL, namespaced <endpoint>_<backend>_<tool>.
+#
+# Secrets come from the environment (sops-rendered by homelab), never from this file:
+#   GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   -- the one upstream Google OAuth app
+#   A2MCP_BASE_URL                            -- the PUBLIC https URL (e.g. https://mcp.example.net)
+#   A2MCP_JWT_SIGNING_KEY                     -- stable; `openssl rand -hex 32` (else restarts reauth)
+#   A2MCP_OAUTH_ENCRYPTION_KEY                -- optional; encrypts the token store at rest
+#   OTEL_EXPORTER_OTLP_ENDPOINT               -- optional; enables per-tool-call spans
+# With GOOGLE_CLIENT_ID unset the gateway serves OPEN (bind behind a tailnet/LAN only).
+
+auth:
+  provider: google        # only value supported in v1 (a wrapper, not any-*)
+
+endpoints:
+  home:
+    backends:
+      - name: ha
+        url: http://ha-mcp:8087/mcp
+        transport: sse
+        # headers only carry what's needed to REACH the backend privately; a backend's
+        # own upstream credential (ha-mcp's HA token) stays in the backend.
+        # headers: { X-Backend-Path: "${HA_MCP_SECRET_PATH}" }
+
+  # A later domain is just more YAML, no code change:
+  # code:
+  #   backends:
+  #     - { name: git, url: http://git-mcp:8080/mcp, transport: streamable }

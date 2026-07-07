@@ -1,0 +1,50 @@
+[project]
+name = "a2mcp"
+version = "0.1.0"
+description = "Config-driven MCP gateway on FastMCP: publishes self-hosted MCP servers behind Google OAuth (DCR down, Google up)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Denis Tomilin" }]
+dependencies = [
+    # 3.x is GA as of 2026-07; a2kit + a2web both pin this range. See design decision 1.
+    "fastmcp>=3.2,<4",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    # Persistent + encrypted OAuth token store (blessed recipe: daily-reauth trap otherwise).
+    "py-key-value-aio[disk]>=0.2",
+    # OTLP span export for per-tool-call telemetry.
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+]
+
+[project.scripts]
+a2mcp = "a2mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/a2mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]  # asserts + dummy secrets are fine in tests
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

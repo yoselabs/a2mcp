@@ -33,7 +33,19 @@ sit at stage 1 indefinitely. A package MUST NOT import the host.
 
 ## Shelved (2nd sightings)
 
-_none yet._
+### google-dcr-shim  -- 2nd sighting (rule-of-three: at 2, do NOT extract yet)
+- **Call site 1:** a2web `build_google_provider` (a2web/src/a2web/server.py) — the working
+  `GoogleProvider(...)` + FileTreeStore + FernetEncryptionWrapper wiring, per a2kit's
+  `docs/patterns/mcp-auth.md` (ADR 0010/0011).
+- **Call site 2:** a2mcp `src/a2mcp` auth wiring (this repo, C3) — same recipe, but for a
+  proxy-composition gateway rather than a tool-authoring server.
+- **Divergence watch:** a2web serves ONE authored surface; a2mcp fronts MANY proxied
+  backends behind one provider. If the two wirings stay identical at a 3rd sighting,
+  PROMOTE into a2kit (the recipe's own suggested home) as a thin `GoogleProvider` factory.
+  If they diverge (e.g. a2mcp needs multi-endpoint redirect handling a2web never wants),
+  EVICT — it was a shared doc-pattern, not a shared primitive.
+- **Note:** the reusable artifact today is a2kit's *doc* + a2web's code, NOT a package. Copy
+  the pattern in-repo for v1; a package is gated on a real, non-divergent 3rd consumer.
 
 ## Watch list (evaluate for the shelf as they earn a 2nd consumer)
 

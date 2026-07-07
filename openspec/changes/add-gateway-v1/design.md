@@ -41,13 +41,28 @@ Env (from homelab sops): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `A2MCP_BASE
 
 ## Decisions
 
-1. **Auth = adopt-or-thin-build the shim, do not reinvent.** Prefer a2kit's Google-DCR
-   helper if it exists (build-vs-adopt gate). Else wire `GoogleProvider`/`OAuthProxy`
-   directly. The test-users gate is enforced at Google's consent screen; no allowlist in
-   our config. `base_url` correctness behind the reverse proxy is the classic footgun.
-2. **Composition is FastMCP's job.** Use `as_proxy`/`mount`; our code is the config->mount
-   glue, not a reimplementation. Namespacing prevents tool-name collisions across
-   backends.
+1. **Auth = build here, direct FastMCP `GoogleProvider` (S2 resolved).** a2kit has no
+   Google-DCR helper to adopt: by ADR 0010/0011 it is auth-agnostic on the MCP surface and
+   the "blessed recipe" is a doc, first realized in a2web's `build_google_provider`. So
+   a2mcp mirrors a2web: construct `GoogleProvider(client_id, client_secret, base_url,
+   jwt_signing_key, client_storage, required_scopes)` and pass it as `FastMCP(auth=...)`.
+   `jwt_signing_key` (stable env) and a persistent encrypted `client_storage` (FileTreeStore
+   + FernetEncryptionWrapper) are REQUIRED — the in-memory default loses tokens on restart
+   (daily-reauth trap). Env-gated `StaticTokenVerifier` bearer escape hatch for
+   DCR-incompatible clients. Since a2mcp composes proxies rather than authoring tools,
+   **a2kit is not a v1 dependency** (pure FastMCP). The test-users gate is enforced at
+   Google's consent screen; no allowlist in our config. `base_url` = the public https URL,
+   forwarded untouched by Traefik, is the classic footgun.
+2. **Composition is FastMCP's job.** Use `FastMCP.as_proxy(url)` + `root.mount(server,
+   namespace=...)` (verified against installed fastmcp 3.4.3; `prefix=` is the deprecated
+   alias for `namespace=`); our code is the config->mount glue, not a reimplementation.
+   **Endpoint model locked (origin design left this open): one MCP URL, nested namespaces**
+   `<endpoint>_<backend>_<tool>`. One root `FastMCP(auth=provider)`; each endpoint is a
+   sub-server mounted under its name, each backend a proxy mounted under its name. Rationale:
+   keeps exactly ONE authorization server and ONE Google redirect URI (per-path endpoint
+   URLs would fracture the single registered redirect the origin design mandates), and it is
+   the thin choice. Per-path endpoint URLs are a future enhancement gated on FastMCP making
+   split AS/resource composition trivial.
 3. **Backend credential isolation.** The gateway holds only what it needs to REACH a
    backend (url + optional headers). A backend's own credential (ha-mcp's HA token) stays
    in the backend, which is bound to the private net.
@@ -68,7 +83,9 @@ See `docs/design/primitive-shelf.md`.
 
 ## Risks
 
-- **FastMCP 3.0 beta**: pin v2-stable; the OTel/per-component-auth niceties wait for GA.
+- **FastMCP pin** (was "3.0 beta, pin v2"): stale as of 2026-07. 3.x is GA; a2kit and a2web
+  both pin `fastmcp>=3.2,<4`, so a2mcp does too. Prefer 3.x native OTel over a hand-rolled
+  middleware; verify the per-tool-span API against the installed version before coding C4.
 - **Client-compat is the real work** (research): claude.ai custom connector and one
   mobile app must be smoke-tested against the live DCR flow. Watch access-token expiry,
   loopback redirect-port variance, and `base_url` mismatches.

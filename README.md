@@ -42,6 +42,24 @@ declarative config; there is no homelab-specific code here.
 Python, FastMCP, `uv`. See `CLAUDE.md` for conventions and the micro-software
 discipline, and `docs/design/primitive-shelf.md` before hand-rolling any helper.
 
+## Run it
+
+```bash
+uv sync
+cp mcp-gateway.example.yaml mcp-gateway.yaml   # point backends at your MCP servers
+uv run a2mcp                                    # serves http://0.0.0.0:8000 (+ /health)
+# or: docker build -t a2mcp . && docker run -p 8000:8000 \
+#       -v $PWD/mcp-gateway.yaml:/config/mcp-gateway.yaml:ro a2mcp
+```
+
+With `GOOGLE_CLIENT_ID` unset the gateway serves **open** (bind behind a tailnet/LAN
+only). Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `A2MCP_BASE_URL` /
+`A2MCP_JWT_SIGNING_KEY` to turn on the Google-federated DCR OAuth. See
+`mcp-gateway.example.yaml` for the full env list.
+
 ## Status
 
-Pre-v1. Build tracked in OpenSpec change `add-gateway-v1` (run `openspec status`).
+v1 engine built (config, composition, Google-DCR auth, native OTel, health; Docker + CI).
+Tracked in OpenSpec change `add-gateway-v1` (run `openspec status`). Remaining before
+homelab flips "done": the manual **claude.ai custom-connector DCR smoke** (client-compat
+gate) and publishing the first image digest for homelab to pin.
