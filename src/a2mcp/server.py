@@ -37,7 +37,16 @@ class Gateway:
 
     def http_app(self) -> Starlette:
         """Assemble the parent ASGI app: shared AS at root, each group at ``/<group>``."""
-        group_apps = {name: server.http_app() for name, server in self.servers.items()}
+        # host_origin_protection=False: a2mcp ALWAYS runs behind a reverse proxy that is
+        # the sole ingress and routes strictly by Host (Traefik), and auth is a bearer
+        # token, not an ambient browser cookie. MCP's DNS-rebinding Host/Origin check is
+        # therefore both redundant (the proxy already gates Host) and harmful: it 421s a
+        # legitimate request whose Host is the PUBLIC name (not localhost) or whose Origin
+        # is an off-host AI client (claude.ai). Disable it on every group app.
+        group_apps = {
+            name: server.http_app(host_origin_protection=False)
+            for name, server in self.servers.items()
+        }
 
         @asynccontextmanager
         async def lifespan(_app: Starlette) -> AsyncIterator[None]:
