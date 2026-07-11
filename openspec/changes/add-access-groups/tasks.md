@@ -32,7 +32,9 @@
 ## 6. Ship
 
 - [x] 6.1 Update README (backends+groups model, per-group URLs, URL-as-capability posture + enforced-membership upgrade note, resource scoping).
-- [~] 6.2 Build + publish a new digest-pinned GHCR image; record the digest. Local build verified (`docker build` green; container boots, serves `/admin/mcp` + `/consumer/mcp`, `/health` reports group fan-out). **Publish is CI-driven** (`.github/workflows/ci.yml` -> `ghcr.io/yoselabs/a2mcp`, digest in job summary) on push to `main`/tag; record that digest here after the push.
+- [x] 6.2 Build + publish a new digest-pinned GHCR image; record the digest. Local build verified (container boots, serves `/admin/mcp` + `/consumer/mcp`, `/health` reports group fan-out). Published by CI on push to `main` (commit `77ff22a`):
+  `ghcr.io/yoselabs/a2mcp@sha256:b473c8ac0505a62745fc2402cbb7cadad7fdb0007241f180c6975319cff49f6b`
+  (pin this in homelab `platform/mcp-gateway`, task 7.1). For a semver-pinned image, push a `v*` tag.
 - [ ] 6.3 Per-group discovery smoke (throwaway funnel, same method as the v1 deploy spike): verify `/admin/mcp` and `/consumer/mcp` each serve 401 + correct discovery, and that a filtered tool is absent + uncallable in `consumer` but present in `admin`. Use **MCP Inspector before claude.ai** (Inspector sends the RFC 8707 `resource` param, so it is the stricter canary; if it connects, claude.ai will). Confirm a real token minted at the AS actually authorizes a `tools/call` on a group URL (the seam the unit suite mocks): this is what proves the audience fix end-to-end. Test both trailing-slash (`/consumer/mcp/`) and no-slash (`/consumer/mcp`) POSTs.
 
 ## 7. Homelab consumer handoff (iorlas/homelab)
