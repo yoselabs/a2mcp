@@ -48,7 +48,13 @@ curated subset:
   explicit allow-list instead freezes the surface until you edit it.
 
 Within a group URL, tools are namespaced `<backend>_<tool>` (the group is implied by the
-URL, no group prefix).
+URL, no group prefix). A backend ref MAY set **`prefix: false`** to drop that namespace,
+for two reasons: (A) the backend already self-prefixes its own tool names (else you get
+`ha_ha_get_state`), or (B) it is the only backend in the group, so the prefix is noise. The
+flag is per ref, so the same backend can be prefixed in `admin` and unprefixed in
+`consumer`. At most one backend per group may be unprefixed (the prefix is how the gateway
+attributes a tool to its backend for scope enforcement; two unprefixed backends are
+ambiguous and fail config validation).
 
 ### Access is URL-as-capability (v1)
 

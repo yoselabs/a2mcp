@@ -15,7 +15,11 @@ from a2mcp.telemetry import _split_namespaced
 
 
 def test_split_namespaced() -> None:
-    assert _split_namespaced("ha_get_state") == ("ha", "get_state")
+    # With known prefixed backends, split at the backend marker.
+    assert _split_namespaced("ha_get_state", ("ha",)) == ("ha", "get_state")
+    # A bare name (unprefixed backend) is attributed to it, not split.
+    assert _split_namespaced("get_state", (), "ha") == ("ha", "get_state")
+    # No backend info -> best-effort first-underscore split.
     assert _split_namespaced("a_b") == ("a", "b")
     assert _split_namespaced("solo") == (None, "solo")
 

@@ -65,11 +65,24 @@ def build_group_server(
     server: FastMCP = FastMCP(name=group_name, auth=auth, lifespan=lifespan)
     # Scope middleware first so it filters/guards before telemetry and the proxies.
     server.add_middleware(GroupScopeMiddleware(group))
-    server.add_middleware(ToolCallSpanMiddleware(group=group_name))
+    prefixed = tuple(r.name for r in group.backends if r.prefix)
+    unprefixed = next((r.name for r in group.backends if not r.prefix), None)
+    server.add_middleware(
+        ToolCallSpanMiddleware(
+            group=group_name, prefixed_backends=prefixed, unprefixed_backend=unprefixed
+        )
+    )
     for m in extra_middleware or []:
         server.add_middleware(m)
     for ref in group.backends:
-        server.mount(build_backend_proxy(backends[ref.name]), namespace=ref.name)
+        proxy = build_backend_proxy(backends[ref.name])
+        # prefix: false (D6) -> mount without a namespace, so tools keep their bare names.
+        # The loader guarantees at most one unprefixed backend per group, so the scope
+        # middleware can still attribute a bare name to it.
+        if ref.prefix:
+            server.mount(proxy, namespace=ref.name)
+        else:
+            server.mount(proxy)
     return server
 
 

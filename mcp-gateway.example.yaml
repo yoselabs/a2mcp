@@ -38,6 +38,14 @@ backends:
   #   url: http://weather-mcp:8080/mcp
   #   transport: streamable
 
+# Within a group, each backend's tools are namespaced <backend>_<tool> (e.g. ha_get_state)
+# so names never collide across backends. Set `prefix: false` on a backend ref to drop that
+# namespace. ASSESS BEFORE ADDING A BACKEND -- set prefix: false when EITHER:
+#   (A) the backend already self-prefixes its own tool names (else you get ha_ha_get_state);
+#   (B) it is the ONLY backend in the group, so the prefix is pure noise.
+# At MOST ONE backend per group may be unprefixed (the prefix is how the gateway attributes
+# a tool to its backend for scope enforcement; two unprefixed backends are ambiguous).
+
 # Each group is an audience, published at <base>/<group>/mcp.
 groups:
   # admin = everything: bare backend names expose all tools/resources/prompts, including
@@ -51,6 +59,7 @@ groups:
   consumer:
     backends:
       - name: ha
+        prefix:    false                                    # single backend here -> bare names
         tools:     [get_*, "*_state", light_*, switch_*]   # allow-globs (freezes surface)
         exclude:   ["*_config"]                             # deny-globs, applied after allow
         resources: ["*"]                                    # default; all of ha's resources

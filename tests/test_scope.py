@@ -109,3 +109,36 @@ async def test_resource_template_filtered(rich_backend: str) -> None:
         templates = {t.uriTemplate for t in await client.list_resource_templates()}
         # The item template lives under resource://item/... -> filtered out.
         assert not any("item" in t for t in templates)
+
+
+@pytest.mark.asyncio
+async def test_unprefixed_backend_names_bare_and_still_enforces(rich_backend: str) -> None:
+    # prefix: false -> bare tool names, and scoping still applies to the unprefixed backend.
+    ref = BackendRef(name="rb", prefix=False, tools=["get_state"], prompts=["greet"])
+    gw = _gw(ref, rich_backend)
+    async with Client(gw.servers["g"]) as client:
+        names = {t.name for t in await client.list_tools()}
+        assert "get_state" in names  # bare, no rb_ prefix
+        assert not any(n.startswith("rb_") for n in names)
+        # Filtered-out prompt is rejected at call time, addressed by its bare name.
+        prompts = {p.name for p in await client.list_prompts()}
+        assert prompts == {"greet"}
+        with pytest.raises(McpError):
+            await client.get_prompt("internal_debug")
+
+
+@pytest.mark.asyncio
+async def test_same_backend_prefixed_and_unprefixed_across_groups(rich_backend: str) -> None:
+    cfg = GatewayConfig(
+        backends={"rb": Backend(name="rb", url=rich_backend)},
+        groups={
+            "admin": Group(backends=[BackendRef(name="rb")]),  # default prefix
+            "consumer": Group(backends=[BackendRef(name="rb", prefix=False)]),
+        },
+    )
+    gw = build_from_config(cfg)
+    async with Client(gw.servers["admin"]) as client:
+        assert "rb_get_state" in {t.name for t in await client.list_tools()}
+    async with Client(gw.servers["consumer"]) as client:
+        names = {t.name for t in await client.list_tools()}
+        assert "get_state" in names and "rb_get_state" not in names

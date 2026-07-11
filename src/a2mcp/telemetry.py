@@ -45,8 +45,23 @@ def setup_otel_sdk() -> bool:
     return True
 
 
-def _split_namespaced(tool_name: str) -> tuple[str | None, str]:
-    """Best-effort split ``backend_tool`` -> (backend, tool)."""
+def _split_namespaced(
+    tool_name: str,
+    prefixed: tuple[str, ...] = (),
+    unprefixed: str | None = None,
+) -> tuple[str | None, str]:
+    """Split ``backend_tool`` -> (backend, tool) using the group's known backends.
+
+    A name carrying a known prefixed backend's ``<name>_`` maps to it; otherwise it belongs
+    to the group's single unprefixed backend (design D6). With no backend info, fall back to
+    a best-effort first-underscore split.
+    """
+    for name in sorted(prefixed, key=len, reverse=True):
+        marker = f"{name}{_NAMESPACE_SEP}"
+        if tool_name.startswith(marker):
+            return name, tool_name[len(marker) :]
+    if unprefixed is not None:
+        return unprefixed, tool_name
     backend, sep, tool = tool_name.partition(_NAMESPACE_SEP)
     if sep:
         return backend, tool
@@ -56,9 +71,17 @@ def _split_namespaced(tool_name: str) -> tuple[str | None, str]:
 class ToolCallSpanMiddleware(Middleware):
     """Open a span per tool call, tagged with the group URL, backend, and tool."""
 
-    def __init__(self, group: str | None = None) -> None:
+    def __init__(
+        self,
+        group: str | None = None,
+        *,
+        prefixed_backends: tuple[str, ...] = (),
+        unprefixed_backend: str | None = None,
+    ) -> None:
         self.group = group
         self.group_url = f"/{group}/mcp" if group else None
+        self._prefixed = prefixed_backends
+        self._unprefixed = unprefixed_backend
 
     async def on_call_tool(
         self,
@@ -66,7 +89,7 @@ class ToolCallSpanMiddleware(Middleware):
         call_next: CallNext,
     ):
         tool_name = getattr(context.message, "name", "<unknown>")
-        backend, tool = _split_namespaced(tool_name)
+        backend, tool = _split_namespaced(tool_name, self._prefixed, self._unprefixed)
         tracer = get_tracer()
         with tracer.start_as_current_span(f"tool.call {tool_name}") as span:
             span.set_attribute("mcp.tool.name", tool_name)

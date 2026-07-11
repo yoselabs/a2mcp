@@ -77,6 +77,11 @@ class BackendRef(BaseModel):
     resources: list[str] = Field(default_factory=lambda: ["*"])
     prompts: list[str] = Field(default_factory=lambda: ["*"])
     exclude: list[str] = Field(default_factory=list)
+    # When False, mount this backend WITHOUT the `<backend>_` name prefix (design D6): for a
+    # single-backend group where the prefix is noise, or a backend that already self-prefixes
+    # its own tool names. Default True. At most one ref per group may set this False (the
+    # prefix is the scope routing key; two unprefixed backends make a bare name ambiguous).
+    prefix: bool = True
 
     @field_validator("name")
     @classmethod
@@ -111,6 +116,17 @@ class Group(BaseModel):
         dupes = {n for n in names if names.count(n) > 1}
         if dupes:
             raise ValueError(f"duplicate backend refs within a group: {sorted(dupes)}")
+        return v
+
+    @field_validator("backends")
+    @classmethod
+    def _at_most_one_unprefixed(cls, v: list[BackendRef]) -> list[BackendRef]:
+        unprefixed = [b.name for b in v if not b.prefix]
+        if len(unprefixed) > 1:
+            raise ValueError(
+                "at most one backend per group may set prefix: false (the prefix attributes "
+                f"a tool to its backend for scope enforcement); got {sorted(unprefixed)}"
+            )
         return v
 
 

@@ -176,6 +176,45 @@ def test_unsafe_group_name_fails(tmp_path: Path) -> None:
         load_config(p)
 
 
+def test_prefix_defaults_true_and_parses_false(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path,
+        """
+        backends:
+          ha: { url: http://x/mcp }
+          weather: { url: http://y/mcp }
+        groups:
+          admin:
+            backends:
+              - name: ha
+                prefix: false
+              - weather
+        """,
+    )
+    cfg = load_config(p)
+    refs = {r.name: r for r in cfg.groups["admin"].backends}
+    assert refs["ha"].prefix is False
+    assert refs["weather"].prefix is True  # default
+
+
+def test_two_unprefixed_backends_in_group_fails(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path,
+        """
+        backends:
+          ha: { url: http://x/mcp }
+          weather: { url: http://y/mcp }
+        groups:
+          admin:
+            backends:
+              - { name: ha, prefix: false }
+              - { name: weather, prefix: false }
+        """,
+    )
+    with pytest.raises(ConfigError, match="at most one backend per group"):
+        load_config(p)
+
+
 def test_duplicate_backend_ref_in_group_fails(tmp_path: Path) -> None:
     p = _write(
         tmp_path,

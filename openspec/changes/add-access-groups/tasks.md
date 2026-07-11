@@ -39,6 +39,14 @@
 
 ## 7. Homelab consumer handoff (iorlas/homelab)
 
-- [ ] 7.1 Rewrite `platform/mcp-gateway/mcp-gateway.yaml` from `endpoints` to `backends` + `groups`. (Traefik needs no change; the `Host` rule already forwards every path.) Ensure `A2MCP_OAUTH_CACHE_DIR` points at a **persistent volume** and `A2MCP_JWT_SIGNING_KEY` is stable across redeploys, else clients reauthorize on every restart. Run uvicorn with `--proxy-headers` behind Traefik so the consent cookie's Secure logic stays correct.
-- [ ] 7.2 Update the stack README + `[[stack.interface]]` (one interface per group URL, or one documenting the `<base>/<group>/mcp` pattern) and regenerate inventory.
-- [ ] 7.3 Add each group URL as its own claude.ai custom connector; verify the consumer group cannot see/call admin-only tools.
+- [x] 7.1 Rewrote `platform/mcp-gateway/mcp-gateway.yaml` to `backends` + `groups` (one `home` group, all of ha). Image bumped to digest `b473c8ac`; `A2MCP_OAUTH_CACHE_DIR=/data` on the persistent `mcp-gateway-data` volume; `A2MCP_JWT_SIGNING_KEY` already sops-stable; `--proxy-headers`/`forwarded_allow_ips` already set in the image `__main__`. Traefik unchanged. homelab commit `6d0d051`.
+- [x] 7.2 Updated stack README + `[[stack.interface]]` (base_url `https://mcp.shen.iorlas.net/home/mcp`; tools surface `ha_ha_*` until the D6/§8 prefix toggle lands); regenerated inventory; `make lint-arch` green.
+- [ ] 7.3 Add each group URL as its own claude.ai custom connector; verify scoping. **USER** (needs deploy + browser). NOTE: with a single `home` group there is no cross-group check yet; revisit when a scoped second group is added.
+
+## 8. Optional per-ref prefix toggle (design D6)
+
+- [x] 8.1 `config.py`: add `prefix: bool = True` to `BackendRef`. Load-time invariant: AT MOST ONE ref per group may set `prefix: false` (else `ConfigError` naming the group). Update `tests/test_config.py`.
+- [x] 8.2 `compose.py`: when `ref.prefix` is false, `mount(...)` the backend WITHOUT `namespace` (no `<backend>_` / `<scheme>://<backend>/` prefix).
+- [x] 8.3 `scope.py`: attribute an UNPREFIXED name to the group's single unprefixed backend (`_backend_of_name`/`_backend_of_uri` fall back to it when no known `<backend>_` prefix matches), so globs + call-time enforcement still apply. `telemetry.py::_split_namespaced` handles the no-prefix case too.
+- [x] 8.4 Tests: single-backend group unprefixed still filters/enforces; same backend prefixed in one group + unprefixed in another; two-unprefixed rejected at load.
+- [x] 8.5 Docs: `mcp-gateway.example.yaml` + README document `prefix: false` and BOTH reasons to use it (backend self-prefixes -> avoid `ha_ha_*`; single-backend group -> prefix is noise), plus "assess before adding a backend".

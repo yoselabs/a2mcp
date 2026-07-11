@@ -35,29 +35,44 @@ class GroupScopeMiddleware(Middleware):
     """Enforce one group's per-backend primitive globs on lists and on calls."""
 
     def __init__(self, group: Group) -> None:
-        # Longest backend name first so a name that is a prefix of another resolves right.
         self._refs: dict[str, BackendRef] = {ref.name: ref for ref in group.backends}
-        self._names: list[str] = sorted(self._refs, key=len, reverse=True)
+        # Only PREFIXED backends carry a `<name>_` / `<scheme>://<name>/` marker; longest
+        # name first so a name that is a prefix of another resolves right. At most one
+        # backend is unprefixed (loader-enforced), so a name with no known prefix is
+        # unambiguously that one (design D6).
+        self._prefixed: list[str] = sorted(
+            (r.name for r in group.backends if r.prefix), key=len, reverse=True
+        )
+        self._unprefixed: str | None = next(
+            (r.name for r in group.backends if not r.prefix), None
+        )
 
     # --- backend resolution + unprefixing -------------------------------------------
 
     def _backend_of_name(self, namespaced: str) -> tuple[str, str] | None:
-        """``ha_light_on`` -> ``("ha", "light_on")`` using the group's backend names."""
-        for name in self._names:
+        """``ha_light_on`` -> ``("ha", "light_on")``; a bare name -> the unprefixed backend."""
+        for name in self._prefixed:
             prefix = f"{name}_"
             if namespaced.startswith(prefix):
                 return name, namespaced[len(prefix) :]
+        if self._unprefixed is not None:
+            return self._unprefixed, namespaced
         return None
 
     def _backend_of_uri(self, uri: str) -> tuple[str, str] | None:
-        """``resource://ha/config/main`` -> ``("ha", "resource://config/main")``."""
+        """``resource://ha/config/main`` -> ``("ha", "resource://config/main")``.
+
+        For the unprefixed backend the uri is not rewritten, so it is used as-is.
+        """
         scheme, sep, rest = uri.partition("://")
         if not sep:
             return None
-        for name in self._names:
+        for name in self._prefixed:
             prefix = f"{name}/"
             if rest.startswith(prefix):
                 return name, f"{scheme}://{rest[len(prefix) :]}"
+        if self._unprefixed is not None:
+            return self._unprefixed, uri
         return None
 
     # --- the allow/deny decision ----------------------------------------------------

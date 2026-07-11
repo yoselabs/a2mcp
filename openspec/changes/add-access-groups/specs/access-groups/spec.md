@@ -43,6 +43,34 @@ deferred upgrade (Design B), not required by v1's URL-as-capability model.
 - **THEN** the metadata resolves at the origin root, names the one shared resource, and
   references the single shared Authorization Server
 
+### Requirement: A group ref MAY disable the backend name prefix
+
+By default a group namespaces each referenced backend's primitives with the backend name
+(`<backend>_<tool>`, `<scheme>://<backend>/<rest>`), uniformly for that backend. A group's
+backend ref MAY set `prefix: false` to expose that backend's primitives WITHOUT the name
+prefix (for a single-backend group where the prefix is noise, or a backend that already
+self-prefixes its own tool names). The prefix decision SHALL be per ref (so the same backend
+MAY be prefixed in one group and unprefixed in another) and SHALL default to enabled. The
+gateway SHALL NOT auto-decide the prefix from the number of backends in a group (that would
+rename tools when a backend is added).
+
+Because the prefix is also how the gateway attributes a primitive to its backend for scope
+enforcement, AT MOST ONE ref per group MAY set `prefix: false`. A group with two unprefixed
+refs SHALL fail config validation. An unprefixed backend's primitives SHALL still be scoped
+and enforced (attributed to that group's single unprefixed backend).
+
+#### Scenario: Single-backend group without a prefix
+- **WHEN** group `consumer` references one backend `ha` with `prefix: false`
+- **THEN** ha's tools are listed and callable as `<tool>` (e.g. `light_on`) with no `ha_` prefix, and its globs are still enforced
+
+#### Scenario: Same backend prefixed in one group, unprefixed in another
+- **WHEN** `ha` is referenced by `admin` (default) and by `consumer` with `prefix: false`
+- **THEN** `admin` exposes `ha_light_on` and `consumer` exposes `light_on`
+
+#### Scenario: Two unprefixed backends in one group is rejected
+- **WHEN** a group references two backends both with `prefix: false`
+- **THEN** config load fails with a clear error (an unprefixed name could not be attributed to a backend)
+
 ### Requirement: Backend inclusion is the primary scoping gate
 
 A group URL SHALL expose the primitives of ONLY the backends it references. A backend not

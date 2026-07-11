@@ -124,6 +124,42 @@ an optional `members: [email|role]` per group + a post-auth `GroupMembershipMidd
 checks the verified identity claim and returns 403 for non-members. Additive, no
 re-architecture. Recorded now so the config schema can reserve `members` as optional.
 
+### D6. Tool prefix is a per-ref toggle, default on ("all or nothing per backend")
+
+Within a group URL, a backend's tools/prompts are namespaced `<backend>_<tool>` and its
+resources `<scheme>://<backend>/<rest>`. The prefix does DOUBLE duty: (1) it disambiguates
+names that collide across backends, and (2) it is the routing key `GroupScopeMiddleware`
+uses to map a tool back to its backend and apply that backend's globs. It is uniform per
+backend (all its primitives or none), never partial.
+
+The prefix is often noise: a single-backend group (`consumer = [ha]`) has nothing to collide
+with, and a backend that already self-prefixes its own tool names (e.g. tools arriving as
+`ha_*`) becomes an ugly `ha_ha_*`. So a group's ref MAY set `prefix: false` to mount that
+backend without the namespace.
+
+- The flag lives on the **backend REF** (per group), not the backend, so `ha` can be
+  unprefixed in `consumer` yet prefixed in `admin`. Default is `true`.
+- **Default `true`, explicit `false`** (NOT an automatic "prefix iff >1 backend" heuristic):
+  a count-driven prefix would SILENTLY RENAME a group's tools the moment a second backend is
+  added, breaking every client that saved a tool name and contradicting D4's "explicit list
+  freezes the surface." Predictability wins; the operator opts out deliberately.
+- **Load-time invariant (fail-fast):** AT MOST ONE ref per group may be `prefix: false`.
+  With two unprefixed backends, a bare name like `get_state` is ambiguous -- the scope
+  middleware cannot tell whose globs apply -- so `ConfigError`. This needs only the flags and
+  the group's ref count, not the remote tool lists, so it is statically checkable.
+- **Middleware/telemetry consequence:** with an unprefixed backend, a name carrying no known
+  `<backend>_` prefix is attributed to that group's single unprefixed backend (there is at
+  most one). `GroupScopeMiddleware` and `_split_namespaced` learn this rule; this is why
+  `prefix: false` is a real change, not just dropping the mount namespace.
+- **Two distinct reasons to set it, both documented:** (A) the backend self-prefixes (avoid
+  `ha_ha_*`); (B) a single-backend group where the prefix is pure noise. The example config
+  and README call out both, plus the "assess before adding a backend" guidance.
+
+Alternatives rejected: automatic multiplicity heuristic (silent renames on growth); a
+per-backend (global) flag (cannot be clean-when-alone in one group and disambiguated in
+another); per-tool prefix control (violates "all or nothing per backend", and the collision
+it would manage is better solved by including fewer backends per group).
+
 ## Risks / Trade-offs
 
 - **URL-as-capability is weak against a malicious test-user.** A curious/hostile test-user
