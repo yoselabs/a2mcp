@@ -4,6 +4,9 @@ The write-once engine behind homelab's `platform/mcp-gateway`. A generic,
 config-driven MCP gateway on FastMCP that publishes MCP servers behind Google OAuth.
 See `README.md`. **Origin spec:** `iorlas/homelab` OpenSpec `add-mcp-gateway` (ADR
 0051, Lane 9). Read that for the full rationale before changing the design here.
+Before touching auth/composition, read `docs/design/fastmcp-quirks.md` (hard-won
+FastMCP 3.x behaviours, e.g. `OAuthProxy` is single-audience: no per-group RFC 9728
+resources without a reauth loop).
 
 ## What this repo IS
 

@@ -1,8 +1,17 @@
 """Config loader for ``mcp-gateway.yaml`` -- the gateway's only behaviour input.
 
-The whole point of a2mcp: adding a backend is a config edit, never code. This module
-parses and validates that config and fails loudly on anything malformed (spec:
-"bad config fails fast").
+The whole point of a2mcp: adding or re-scoping a backend is a config edit, never code.
+This module parses and validates that config and fails loudly on anything malformed
+(spec: "bad config fails fast").
+
+Model (add-access-groups):
+
+- ``backends``: each remote MCP server defined ONCE (name -> url, transport, headers).
+- ``groups``: named audiences, each its own MCP URL, each referencing backends by name
+  and optionally refining which primitives (tools/resources/prompts) are exposed via
+  within-backend globs. ``exclude`` deny-globs win over allow-globs.
+- ``members`` on a group is parsed but INERT in v1 (the D5 enforced-membership seam);
+  access is URL-as-capability over the shared Google OAuth.
 """
 
 from __future__ import annotations
@@ -11,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 
 class ConfigError(ValueError):
@@ -22,8 +31,15 @@ class ConfigError(ValueError):
     """
 
 
+def _namespace_safe(kind: str, name: str) -> str:
+    """Reject a name that is not URL-/namespace-safe (alphanumeric plus ``_`` / ``-``)."""
+    if not name.replace("_", "").replace("-", "").isalnum():
+        raise ValueError(f"{kind} name {name!r} must be alphanumeric (plus _ or -)")
+    return name
+
+
 class Backend(BaseModel):
-    """One remote MCP backend to proxy into an endpoint.
+    """One remote MCP backend, defined once and referenced by groups.
 
     ``headers`` are only what the gateway needs to REACH the backend over the private
     network (e.g. ha-mcp's secret path). A backend's OWN upstream credential never
@@ -39,28 +55,62 @@ class Backend(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def _namespace_safe(cls, v: str) -> str:
-        if not v.replace("_", "").replace("-", "").isalnum():
-            raise ValueError(
-                f"backend name {v!r} must be alphanumeric (plus _ or -) to namespace tools"
-            )
-        return v
+    def _name_safe(cls, v: str) -> str:
+        return _namespace_safe("backend", v)
 
 
-class Endpoint(BaseModel):
-    """A named group of backends. Its name namespaces its backends' tools."""
+class BackendRef(BaseModel):
+    """A group's reference to one backend, optionally refining its exposed primitives.
+
+    A bare backend name in the YAML (a plain string) is normalized to this with all
+    selectors defaulting to ``["*"]`` (expose everything of that kind). Explicit allow
+    lists freeze the surface; ``exclude`` deny-globs are applied after allow and win.
+
+    Globs match the UNPREFIXED primitive name within THIS backend only (tools/prompts
+    by name; resources by ``uri`` / template ``uriTemplate``). They never cross backends.
+    """
 
     model_config = {"extra": "forbid"}
 
-    backends: list[Backend] = Field(min_length=1)
+    name: str = Field(min_length=1)
+    tools: list[str] = Field(default_factory=lambda: ["*"])
+    resources: list[str] = Field(default_factory=lambda: ["*"])
+    prompts: list[str] = Field(default_factory=lambda: ["*"])
+    exclude: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _name_safe(cls, v: str) -> str:
+        return _namespace_safe("backend", v)
+
+
+class Group(BaseModel):
+    """A named audience, published at its own MCP URL, curating a subset of backends.
+
+    ``members`` is parsed but INERT in v1 -- the reserved seam for a future post-auth
+    ``GroupMembershipMiddleware`` (design D5). v1 access is URL-as-capability.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    backends: list[BackendRef] = Field(min_length=1)
+    members: list[str] = Field(default_factory=list)
+
+    @field_validator("backends", mode="before")
+    @classmethod
+    def _coerce_bare_names(cls, v: object) -> object:
+        """Let a group list a backend as a bare string (``[ha]``) or a refined mapping."""
+        if isinstance(v, list):
+            return [{"name": item} if isinstance(item, str) else item for item in v]
+        return v
 
     @field_validator("backends")
     @classmethod
-    def _unique_backend_names(cls, v: list[Backend]) -> list[Backend]:
+    def _unique_backend_refs(cls, v: list[BackendRef]) -> list[BackendRef]:
         names = [b.name for b in v]
         dupes = {n for n in names if names.count(n) > 1}
         if dupes:
-            raise ValueError(f"duplicate backend names within an endpoint: {sorted(dupes)}")
+            raise ValueError(f"duplicate backend refs within a group: {sorted(dupes)}")
         return v
 
 
@@ -73,20 +123,54 @@ class Auth(BaseModel):
 
 
 class GatewayConfig(BaseModel):
-    """The whole ``mcp-gateway.yaml``: an auth provider plus named endpoints."""
+    """The whole ``mcp-gateway.yaml``: auth, backends defined once, and named groups."""
 
     model_config = {"extra": "forbid"}
 
     auth: Auth = Field(default_factory=Auth)
-    endpoints: dict[str, Endpoint] = Field(min_length=1)
+    backends: dict[str, Backend] = Field(min_length=1)
+    groups: dict[str, Group] = Field(min_length=1)
 
-    @field_validator("endpoints")
+    @field_validator("backends", mode="before")
     @classmethod
-    def _endpoint_names_safe(cls, v: dict[str, Endpoint]) -> dict[str, Endpoint]:
-        for name in v:
-            if not name.replace("_", "").replace("-", "").isalnum():
-                raise ValueError(f"endpoint name {name!r} must be alphanumeric (plus _ or -)")
+    def _inject_backend_names(cls, v: object) -> object:
+        """Let a backend omit its own ``name`` (the map key is the name)."""
+        if isinstance(v, dict):
+            return {
+                key: {**val, "name": val.get("name", key)} if isinstance(val, dict) else val
+                for key, val in v.items()
+            }
         return v
+
+    @field_validator("groups")
+    @classmethod
+    def _group_names_safe(cls, v: dict[str, Group]) -> dict[str, Group]:
+        for name in v:
+            _namespace_safe("group", name)
+        return v
+
+    @model_validator(mode="after")
+    def _refs_resolve(self) -> GatewayConfig:
+        """Fail fast if any group references a backend not defined under ``backends``."""
+        defined = set(self.backends)
+        missing: list[str] = []
+        for group_name, group in self.groups.items():
+            for ref in group.backends:
+                if ref.name not in defined:
+                    missing.append(f"{group_name} -> {ref.name}")
+        if missing:
+            raise ValueError(
+                "group references undefined backend(s): "
+                + ", ".join(missing)
+                + f". Defined backends: {sorted(defined)}"
+            )
+        # Every backend key must match its own name (guards a hand-written mismatch).
+        for key, backend in self.backends.items():
+            if backend.name != key:
+                raise ValueError(
+                    f"backend key {key!r} disagrees with its name {backend.name!r}"
+                )
+        return self
 
 
 def load_config(path: str | Path) -> GatewayConfig:

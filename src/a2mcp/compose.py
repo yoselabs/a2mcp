@@ -1,9 +1,12 @@
-"""C2: compose config into one FastMCP server.
+"""C2: compose config into ONE FastMCP server PER GROUP (design D2).
 
-Endpoint model (locked in design decision 2): ONE root ``FastMCP`` carrying the auth
-provider; each endpoint is a sub-server mounted under its name; each backend is a proxy
-mounted under its name. Tool names become ``<endpoint>_<backend>_<tool>``. One MCP URL,
-one authorization server, one Google redirect URI. Adding a backend is pure config.
+Each group is its own server: every backend the group references is proxied and mounted
+under the backend name, so tools become ``<backend>_<tool>`` (no group prefix -- the group
+is implied by the URL the server is mounted at). Each group server carries the shared auth
+provider, a ``GroupScopeMiddleware`` bound to that group's globs, and the per-tool-call
+telemetry middleware. ``server.py`` mounts each group server at ``/<group>``.
+
+Adding a backend is pure config: define it under ``backends``, list it in a group.
 """
 
 from __future__ import annotations
@@ -21,7 +24,9 @@ from fastmcp.server import create_proxy
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.proxy import ProxyClient
 
-from .config import Backend, GatewayConfig
+from .config import Backend, GatewayConfig, Group
+from .scope import GroupScopeMiddleware
+from .telemetry import ToolCallSpanMiddleware
 
 
 def backend_transport(backend: Backend) -> ClientTransport:
@@ -43,26 +48,53 @@ def build_backend_proxy(backend: Backend) -> FastMCP:
     return create_proxy(client, name=backend.name)
 
 
-def build_gateway(
-    config: GatewayConfig,
+def build_group_server(
+    group_name: str,
+    group: Group,
+    backends: dict[str, Backend],
     *,
     auth: object | None = None,
     lifespan: Callable[..., Any] | None = None,
-    middleware: list[Middleware] | None = None,
+    extra_middleware: list[Middleware] | None = None,
 ) -> FastMCP:
-    """Assemble the root gateway server from a validated config.
+    """Assemble one group's FastMCP server from the backends it references.
 
-    Nested namespacing: endpoint sub-server per endpoint (each backend proxy mounted
-    under its name), then each endpoint mounted on root under the endpoint name.
+    Backend inclusion is the primary gate; the ``GroupScopeMiddleware`` refines within
+    each backend and enforces the same globs at call time.
     """
-    root: FastMCP = FastMCP(name="a2mcp", auth=auth, lifespan=lifespan)
-    for m in middleware or []:
-        root.add_middleware(m)
+    server: FastMCP = FastMCP(name=group_name, auth=auth, lifespan=lifespan)
+    # Scope middleware first so it filters/guards before telemetry and the proxies.
+    server.add_middleware(GroupScopeMiddleware(group))
+    server.add_middleware(ToolCallSpanMiddleware(group=group_name))
+    for m in extra_middleware or []:
+        server.add_middleware(m)
+    for ref in group.backends:
+        server.mount(build_backend_proxy(backends[ref.name]), namespace=ref.name)
+    return server
 
-    for endpoint_name, endpoint in config.endpoints.items():
-        endpoint_server: FastMCP = FastMCP(name=endpoint_name)
-        for backend in endpoint.backends:
-            endpoint_server.mount(build_backend_proxy(backend), namespace=backend.name)
-        root.mount(endpoint_server, namespace=endpoint_name)
 
-    return root
+def build_group_servers(
+    config: GatewayConfig,
+    *,
+    auth: object | None = None,
+    providers: dict[str, object | None] | None = None,
+    lifespan: Callable[..., Any] | None = None,
+    extra_middleware: list[Middleware] | None = None,
+) -> dict[str, FastMCP]:
+    """Build one FastMCP server per group, keyed by group name.
+
+    ``providers`` (group name -> provider) gives each group its own auth provider so it
+    can advertise per-group protected-resource metadata; ``auth`` is the fallback applied
+    to every group when no per-group provider is given (tests / single-resource setups).
+    """
+    return {
+        name: build_group_server(
+            name,
+            group,
+            config.backends,
+            auth=(providers.get(name) if providers is not None else auth),
+            lifespan=lifespan,
+            extra_middleware=extra_middleware,
+        )
+        for name, group in config.groups.items()
+    }

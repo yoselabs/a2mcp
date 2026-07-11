@@ -1,4 +1,4 @@
-"""C4 + V3: a tool call emits a span identifying the backend and tool."""
+"""C4 + V3: a tool call emits a span identifying the group, backend, and tool."""
 
 from __future__ import annotations
 
@@ -9,31 +9,32 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from a2mcp.config import Backend, Endpoint, GatewayConfig
+from a2mcp.config import Backend, BackendRef, GatewayConfig, Group
 from a2mcp.server import build_from_config
 from a2mcp.telemetry import _split_namespaced
 
 
 def test_split_namespaced() -> None:
-    assert _split_namespaced("home_ha_get_state") == ("home", "ha", "get_state")
-    assert _split_namespaced("a_b") == ("a", None, "b")
-    assert _split_namespaced("solo") == (None, None, "solo")
+    assert _split_namespaced("ha_get_state") == ("ha", "get_state")
+    assert _split_namespaced("a_b") == ("a", "b")
+    assert _split_namespaced("solo") == (None, "solo")
 
 
 @pytest.mark.asyncio
-async def test_tool_call_emits_backend_span(stub_backend: str) -> None:
+async def test_tool_call_emits_group_and_backend_span(stub_backend: str) -> None:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    # Our middleware uses fastmcp's tracer, which resolves the global provider.
     trace._TRACER_PROVIDER = None  # reset any prior global
     trace.set_tracer_provider(provider)
 
-    ep = Endpoint(backends=[Backend(name="ha", url=stub_backend)])
-    cfg = GatewayConfig(endpoints={"home": ep})
+    cfg = GatewayConfig(
+        backends={"ha": Backend(name="ha", url=stub_backend)},
+        groups={"admin": Group(backends=[BackendRef(name="ha")])},
+    )
     gw = build_from_config(cfg)
-    async with Client(gw.server) as client:
-        await client.call_tool("home_ha_echo", {"text": "z"})
+    async with Client(gw.servers["admin"]) as client:
+        await client.call_tool("ha_echo", {"text": "z"})
 
     provider.force_flush()
     spans = exporter.get_finished_spans()
@@ -41,5 +42,6 @@ async def test_tool_call_emits_backend_span(stub_backend: str) -> None:
     assert tool_spans, f"no tool.call span among {[s.name for s in spans]}"
     attrs = tool_spans[0].attributes or {}
     assert attrs.get("a2mcp.backend") == "ha"
-    assert attrs.get("a2mcp.endpoint") == "home"
-    assert attrs.get("mcp.tool.name") == "home_ha_echo"
+    assert attrs.get("a2mcp.group") == "admin"
+    assert attrs.get("a2mcp.group.url") == "/admin/mcp"
+    assert attrs.get("mcp.tool.name") == "ha_echo"

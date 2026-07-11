@@ -25,7 +25,7 @@ _DOWN_THRESHOLD = 2
 @dataclass
 class BackendHealth:
     name: str
-    endpoint: str
+    groups: list[str]  # which groups reference this backend (it is probed once)
     status: str = "unknown"  # unknown | up | flaky | down
     tools: int | None = None
     consecutive_failures: int = 0
@@ -35,7 +35,7 @@ class BackendHealth:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "endpoint": self.endpoint,
+            "groups": self.groups,
             "status": self.status,
             "tools": self.tools,
             "last_ok": self.last_ok,
@@ -56,12 +56,16 @@ class HealthMonitor:
     ) -> None:
         self.interval = interval
         self.probe_timeout = probe_timeout
-        self._backends: list[tuple[Backend, BackendHealth]] = []
-        for endpoint_name, endpoint in config.endpoints.items():
-            for backend in endpoint.backends:
-                self._backends.append(
-                    (backend, BackendHealth(name=backend.name, endpoint=endpoint_name))
-                )
+        # Probe each backend ONCE, even if many groups reference it. Record which groups
+        # do, so /health shows the fan-out (a down backend degrades every group using it).
+        groups_of: dict[str, list[str]] = {name: [] for name in config.backends}
+        for group_name, group in config.groups.items():
+            for ref in group.backends:
+                groups_of[ref.name].append(group_name)
+        self._backends: list[tuple[Backend, BackendHealth]] = [
+            (backend, BackendHealth(name=name, groups=groups_of[name]))
+            for name, backend in config.backends.items()
+        ]
         self._task: asyncio.Task[None] | None = None
 
     @property

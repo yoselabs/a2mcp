@@ -49,8 +49,18 @@ class AuthEnv:
         )
 
 
-def build_auth_provider(env: AuthEnv | None = None) -> object | None:
+def build_auth_provider(
+    env: AuthEnv | None = None,
+    *,
+    resource_base_url: str | None = None,
+) -> object | None:
     """Build the FastMCP auth provider from env, or None to serve open.
+
+    ``resource_base_url`` names the RFC 9728 protected resource this provider guards.
+    It shares ``A2MCP_BASE_URL`` as the ONE Authorization Server (one redirect URI at
+    ``<base>/auth/callback``) while advertising per-group protected-resource metadata at
+    ``<base>/.well-known/oauth-protected-resource/<group>/mcp`` (design D2, task 2.3).
+    When omitted it defaults to the AS base (a single-resource server).
 
     Precedence and gating (mirrors the blessed recipe):
 
@@ -94,10 +104,83 @@ def build_auth_provider(env: AuthEnv | None = None) -> object | None:
         client_id=env.client_id,
         client_secret=env.client_secret,
         base_url=env.base_url,
+        resource_base_url=resource_base_url,
         required_scopes=list(env.required_scopes) or None,
         jwt_signing_key=env.jwt_signing_key,
         client_storage=_build_token_store(env),
     )
+
+
+@dataclass(frozen=True)
+class GroupAuth:
+    """The per-group auth plan (design D2): one shared AS + a verifier per group.
+
+    FastMCP's ``OAuthProxy`` is single-resource, single-audience by construction: it mints
+    JWTs whose ``aud`` is its ONE ``resource_url`` and verifies with a strict-equality
+    audience check (``proxy.py`` ``set_mcp_path`` -> ``JWTIssuer``). "One AS, N distinct RFC
+    9728 resources" is therefore NOT expressible without forking the issuer -- a naive
+    per-group ``resource_base_url`` mints ``aud=<base>/`` at the shared AS but verifies
+    ``aud=<base>/<group>/mcp`` at the group, so every authenticated request 401s and the
+    client reauths forever (the "authorize too often" trap).
+
+    So v1 uses ONE protection domain: a single ``GoogleProvider`` at root is the AS AND the
+    one protected resource (``<base>``). Each group server delegates token verification to
+    it via a ``RemoteAuthProvider`` (which serves NO AS routes and no second audience), so a
+    group URL still challenges 401 and points at the one root resource metadata. This is
+    honest with the security model: any test-user can complete the flow against any group
+    URL, so per-group resource identity would enforce nothing anyway (URL-as-capability).
+
+    - ``providers`` maps group name -> its auth provider (or ``None`` to serve open).
+    - ``root_routes`` are the shared AS + root protected-resource metadata, mounted once at
+      the parent origin root: ``/authorize``, ``/token``, ``/register``, ``/auth/callback``,
+      ``/.well-known/oauth-authorization-server``, ``/.well-known/oauth-protected-resource``.
+    """
+
+    providers: dict[str, object | None]
+    root_routes: list[object]
+
+
+def build_group_auth(group_names: list[str], env: AuthEnv | None = None) -> GroupAuth:
+    """Plan auth for every group: one shared AS at root + a delegating verifier per group.
+
+    For the open (no ``GOOGLE_CLIENT_ID``) and static-bearer cases there is nothing to
+    mount at root; every group shares the one provider (or ``None``).
+    """
+    env = env or AuthEnv.from_environ()
+
+    # Open / static-bearer: one provider (or None) for all groups, no root routes.
+    if env.static_bearer_tokens or not env.client_id:
+        shared = build_auth_provider(env)
+        return GroupAuth(providers={g: shared for g in group_names}, root_routes=[])
+
+    from fastmcp.server.auth.auth import RemoteAuthProvider
+
+    base = (env.base_url or "").rstrip("/")
+    # ONE Google AS + one protected resource at root. This instance mints AND verifies, so
+    # its audience is internally consistent. It is also the single owner of the token store
+    # (no N-instance refresh races, no split-brain registrations).
+    root_provider = build_auth_provider(env)
+    # mcp_path="/mcp" keeps the AS flow routes at the origin root while serving the ONE
+    # protected-resource metadata at /.well-known/oauth-protected-resource/mcp -- exactly
+    # the absolute URL each group's 401 challenge points to -- and fixes the shared audience
+    # (aud=<base>/mcp) that both this AS mints and every group verifier (this same instance)
+    # checks.
+    root_routes: list[object] = list(root_provider.get_routes(mcp_path="/mcp"))  # type: ignore[attr-defined]
+
+    # Each group delegates verification to the one AS: same audience, no extra AS routes.
+    # scopes_supported is passed explicitly (GoogleProvider exposes no such attribute, which
+    # RemoteAuthProvider.get_routes would otherwise read).
+    scopes = list(env.required_scopes) or None
+    providers: dict[str, object | None] = {
+        g: RemoteAuthProvider(
+            token_verifier=root_provider,  # type: ignore[arg-type]
+            authorization_servers=[base],  # type: ignore[list-item]
+            base_url=base,
+            scopes_supported=scopes,
+        )
+        for g in group_names
+    }
+    return GroupAuth(providers=providers, root_routes=root_routes)
 
 
 def _build_token_store(env: AuthEnv) -> object:

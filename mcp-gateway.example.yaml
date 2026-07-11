@@ -1,30 +1,57 @@
 # mcp-gateway.example.yaml -- copy to mcp-gateway.yaml (homelab supplies the real one).
 #
-# Behaviour is 100% driven by this file. Adding a backend is a config edit, never code.
-# Tools are served under one MCP URL, namespaced <endpoint>_<backend>_<tool>.
+# Behaviour is 100% driven by this file. Adding or re-scoping a backend is a config edit,
+# never code. Each GROUP is published at its own MCP URL: <base>/<group>/mcp. Within a
+# group, tools are namespaced <backend>_<tool> (the group is implied by the URL).
+#
+# Access is URL-as-capability: every group URL shares the one Google OAuth, so any GCP
+# test-user can authenticate; a group's separation is possession of its URL. There is no
+# per-member check in v1 (see `members` below). Keep the test-user set tiny and trusted.
 #
 # Secrets come from the environment (sops-rendered by homelab), never from this file:
 #   GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   -- the one upstream Google OAuth app
 #   A2MCP_BASE_URL                            -- the PUBLIC https URL (e.g. https://mcp.example.net)
 #   A2MCP_JWT_SIGNING_KEY                     -- stable; `openssl rand -hex 32` (else restarts reauth)
-#   A2MCP_OAUTH_ENCRYPTION_KEY                -- optional; encrypts the token store at rest
+#   A2MCP_OAUTH_CACHE_DIR                     -- token store path; MOUNT A PERSISTENT VOLUME here
+#                                                (default ~/.local/share/a2mcp/oauth is wiped on
+#                                                 container redeploy -> you reauthorize every time)
+#   A2MCP_OAUTH_ENCRYPTION_KEY                -- optional; encrypts the token store (incl. Google
+#                                                refresh tokens) at rest. Set it if the volume is
+#                                                not otherwise encrypted.
 #   OTEL_EXPORTER_OTLP_ENDPOINT               -- optional; enables per-tool-call spans
 # With GOOGLE_CLIENT_ID unset the gateway serves OPEN (bind behind a tailnet/LAN only).
 
 auth:
   provider: google        # only value supported in v1 (a wrapper, not any-*)
 
-endpoints:
-  home:
+# Each backend is defined ONCE here (url, transport, optional reach-headers).
+backends:
+  ha:
+    url: http://ha-mcp:8087/mcp
+    transport: sse
+    # headers only carry what's needed to REACH the backend privately; a backend's
+    # own upstream credential (ha-mcp's HA token) stays in the backend.
+    # headers: { X-Backend-Path: "${HA_MCP_SECRET_PATH}" }
+
+  # A later backend is just more YAML, no code change:
+  # weather:
+  #   url: http://weather-mcp:8080/mcp
+  #   transport: streamable
+
+# Each group is an audience, published at <base>/<group>/mcp.
+groups:
+  # admin = everything: bare backend names expose all tools/resources/prompts, including
+  # ones a backend ADDS later (the surface re-filters each list call).
+  admin:
+    backends: [ha]
+    # members: [you@example.com]   # parsed but INERT in v1 (reserved enforcement seam)
+
+  # consumer = a deliberately curated slice of the SAME backends. Globs match the
+  # unprefixed primitive name WITHIN ha only; `exclude` wins over the allow-globs.
+  consumer:
     backends:
       - name: ha
-        url: http://ha-mcp:8087/mcp
-        transport: sse
-        # headers only carry what's needed to REACH the backend privately; a backend's
-        # own upstream credential (ha-mcp's HA token) stays in the backend.
-        # headers: { X-Backend-Path: "${HA_MCP_SECRET_PATH}" }
-
-  # A later domain is just more YAML, no code change:
-  # code:
-  #   backends:
-  #     - { name: git, url: http://git-mcp:8080/mcp, transport: streamable }
+        tools:     [get_*, "*_state", light_*, switch_*]   # allow-globs (freezes surface)
+        exclude:   ["*_config"]                             # deny-globs, applied after allow
+        resources: ["*"]                                    # default; all of ha's resources
+        # prompts omitted -> default ["*"] (all of ha's prompts)

@@ -31,14 +31,27 @@ def main() -> None:
 
     host = os.environ.get("A2MCP_HOST", "0.0.0.0")  # noqa: S104 - container binds all by design
     port = int(os.environ.get("A2MCP_PORT", "8000"))
+    groups = ", ".join(f"/{g}/mcp" for g in gateway.config.groups)
     logging.getLogger("a2mcp").info(
-        "serving %d endpoint(s) on http://%s:%d (auth=%s)",
-        len(gateway.config.endpoints),
+        "serving %d group(s) [%s] on http://%s:%d (auth=%s)",
+        len(gateway.config.groups),
+        groups,
         host,
         port,
         "on" if gateway.auth_enabled else "OPEN",
     )
-    gateway.server.run(transport="http", host=host, port=port)
+    import uvicorn
+
+    # proxy_headers/forwarded-allow-ips: we always run behind a reverse proxy (Traefik),
+    # so honour X-Forwarded-* to keep the public https scheme (consent-cookie Secure flag,
+    # OAuth redirect URLs) correct.
+    uvicorn.run(
+        gateway.http_app(),
+        host=host,
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":
