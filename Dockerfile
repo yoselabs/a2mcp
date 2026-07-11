@@ -33,6 +33,12 @@ ENV PATH="/app/.venv/bin:$PATH" \
     A2MCP_PORT=8000 \
     A2MCP_OAUTH_CACHE_DIR=/data/oauth
 
+# Create /data owned by a2mcp BEFORE declaring the volume, so a fresh named volume
+# inherits a2mcp ownership (Docker seeds an empty volume from the image path). Without
+# this the volume root is root-owned and the non-root app cannot create the OAuth store
+# -> PermissionError at the first /authorize.
+RUN mkdir -p /data/oauth && chown -R a2mcp:a2mcp /data
+
 USER a2mcp
 EXPOSE 8000
 

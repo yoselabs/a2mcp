@@ -186,13 +186,18 @@ def build_group_auth(group_names: list[str], env: AuthEnv | None = None) -> Grou
 def _build_token_store(env: AuthEnv) -> object:
     """Persistent (and, when a key is given, encrypted) OAuth token store.
 
-    The in-memory default loses tokens on restart -> daily-reauth trap. FileTreeStore
-    survives restarts; FernetEncryptionWrapper encrypts at rest.
+    The in-memory default loses tokens on restart -> daily-reauth trap. DiskStore
+    (diskcache) survives restarts; FernetEncryptionWrapper encrypts at rest.
+
+    NOT FileTreeStore: it maps a key straight onto a filesystem path, so a client_id
+    that is a URL -- which is exactly what claude.ai's CIMD flow sends
+    (``https://claude.ai/oauth/mcp-oauth-client-metadata``) -- turns into uncreated
+    nested dirs and a 500 at /authorize. DiskStore hashes keys, so URL keys are safe.
     """
-    from key_value.aio.stores.filetree import FileTreeStore
+    from key_value.aio.stores.disk import DiskStore
 
     store_dir = env.oauth_cache_dir or _default_cache_dir()
-    store: object = FileTreeStore(data_directory=store_dir)
+    store: object = DiskStore(directory=store_dir)
     if env.encryption_key:
         from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
