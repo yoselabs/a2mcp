@@ -61,9 +61,10 @@
 
 - [x] 4.1 Build + publish a new digest-pinned GHCR image; record the digest (same
   process as `add-access-groups` task 6.2).
-  (Pushed to `main` at commit `8da23bf`; CI's `publish` job builds + pushes
-  `ghcr.io/yoselabs/a2mcp` and records the digest in the run's step summary. Check
-  https://github.com/yoselabs/a2mcp/actions for the digest once the run completes.)
+  Published by CI on push to `main` (commit `bbdc9f5`, run
+  https://github.com/yoselabs/a2mcp/actions/runs/29466136892):
+  `ghcr.io/yoselabs/a2mcp@sha256:1d29e4dc4fc56f5cb1aab08c3c9658a9d97e200e9633c95a1fb6347928f3e888`
+  (pin this in homelab `platform/mcp-gateway`, task 4.2 below).
 - [ ] 4.2 Homelab handoff: bump the pinned digest in `platform/mcp-gateway`; note in the
   deploy announcement that existing users will see one re-auth prompt.
   (Blocked on 4.1's digest + requires the separate `iorlas/homelab` repo, not open in
