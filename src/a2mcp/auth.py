@@ -140,6 +140,32 @@ class GroupAuth:
     root_routes: list[object]
 
 
+class _OriginResourceMixin:
+    """Advertises the bare origin as the RFC 9728 resource, never a suffixed path.
+
+    FastMCP always calls a mounted server's own auth provider with
+    ``get_routes(mcp_path="/mcp")`` internally (``mcp_path`` doubles as the literal
+    streamable-HTTP endpoint path, which a2mcp cannot vary without moving the group's
+    URL off ``<group>/mcp``). The base ``AuthProvider._get_resource_url`` unconditionally
+    appends any truthy ``path`` to ``resource_base_url``, so every group would otherwise
+    advertise ``<base>/mcp`` -- neither the dialed group URL nor its origin, which fails
+    strict RFC 9728/8707 clients' "URL-or-origin" check (Claude Code SDK; see
+    ``docs/design/fastmcp-quirks.md``).
+
+    Overriding ``_get_resource_url`` to ignore ``mcp_path`` entirely is the only seam
+    that lets *advertised* resource diverge from that fixed value. It does NOT touch
+    *enforcement*: ``verify_token`` still delegates to the one shared ``root_provider``
+    instance untouched, so mint audience and verify audience stay identical regardless
+    of what this mixin advertises.
+    """
+
+    resource_base_url: object
+    base_url: object
+
+    def _get_resource_url(self, path: str | None = None) -> object | None:  # noqa: ARG002
+        return self.resource_base_url or self.base_url
+
+
 def build_group_auth(group_names: list[str], env: AuthEnv | None = None) -> GroupAuth:
     """Plan auth for every group: one shared AS at root + a delegating verifier per group.
 
@@ -155,24 +181,31 @@ def build_group_auth(group_names: list[str], env: AuthEnv | None = None) -> Grou
 
     from fastmcp.server.auth.auth import RemoteAuthProvider
 
+    class _OriginRemoteAuthProvider(_OriginResourceMixin, RemoteAuthProvider):
+        """``RemoteAuthProvider`` that always advertises the bare origin (see mixin)."""
+
     base = (env.base_url or "").rstrip("/")
     # ONE Google AS + one protected resource at root. This instance mints AND verifies, so
     # its audience is internally consistent. It is also the single owner of the token store
     # (no N-instance refresh races, no split-brain registrations).
     root_provider = build_auth_provider(env)
-    # mcp_path="/mcp" keeps the AS flow routes at the origin root while serving the ONE
-    # protected-resource metadata at /.well-known/oauth-protected-resource/mcp -- exactly
-    # the absolute URL each group's 401 challenge points to -- and fixes the shared audience
-    # (aud=<base>/mcp) that both this AS mints and every group verifier (this same instance)
-    # checks.
-    root_routes: list[object] = list(root_provider.get_routes(mcp_path="/mcp"))  # type: ignore[attr-defined]
+    # mcp_path=None keeps the AS flow routes at the origin root while serving the ONE
+    # protected-resource metadata at /.well-known/oauth-protected-resource (the bare origin,
+    # no /mcp suffix) -- the absolute URL each group's 401 challenge points to -- and fixes
+    # the shared audience (aud=<base>) that both this AS mints and every group verifier
+    # (this same instance) checks. A bare origin satisfies strict RFC 9728/8707 clients'
+    # "URL-or-origin" match against ANY group URL (Claude Code SDK), unlike a fixed
+    # <base>/mcp suffix which matches neither the group URL nor its origin.
+    root_routes: list[object] = list(root_provider.get_routes(mcp_path=None))  # type: ignore[attr-defined]
 
     # Each group delegates verification to the one AS: same audience, no extra AS routes.
     # scopes_supported is passed explicitly (GoogleProvider exposes no such attribute, which
-    # RemoteAuthProvider.get_routes would otherwise read).
+    # RemoteAuthProvider.get_routes would otherwise read). _OriginRemoteAuthProvider ignores
+    # the mcp_path="/mcp" FastMCP passes internally when building each group's own http_app,
+    # so it advertises the same bare origin as root regardless.
     scopes = list(env.required_scopes) or None
     providers: dict[str, object | None] = {
-        g: RemoteAuthProvider(
+        g: _OriginRemoteAuthProvider(
             token_verifier=root_provider,  # type: ignore[arg-type]
             authorization_servers=[base],  # type: ignore[list-item]
             base_url=base,

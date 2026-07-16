@@ -75,7 +75,7 @@ async def test_each_group_url_challenges_unauthenticated(stub_backend: str) -> N
 async def test_group_discovery_converges_on_one_resource_and_as(stub_backend: str) -> None:
     # Regression for the audience-mismatch reauth loop: every group's 401 must resolve to
     # ONE protected-resource metadata doc naming a SINGLE resource + the one shared AS. A
-    # per-group resource would mint aud=<base>/ but verify aud=<base>/<group>/mcp and loop.
+    # per-group resource would mint aud=<base> but verify aud=<base>/<group> and loop.
     env = AuthEnv(
         client_id="cid",
         client_secret="sec",
@@ -109,9 +109,50 @@ async def test_group_discovery_converges_on_one_resource_and_as(stub_backend: st
             body = meta.json()
             resources.add(body["resource"])
             auth_servers.update(body["authorization_servers"])
-        # One shared resource + one shared AS across all groups.
-        assert resources == {"https://mcp.example.net/mcp"}
+        # One shared resource, equal to the bare origin (no /mcp suffix), + one shared AS
+        # across all groups.
+        assert resources == {"https://mcp.example.net/"}
         assert auth_servers == {"https://mcp.example.net/"}
         # The one AS metadata is served at the origin root.
         az = await client.get("/.well-known/oauth-authorization-server")
         assert az.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_group_resource_matches_dialed_url_origin_for_strict_clients(
+    stub_backend: str,
+) -> None:
+    # Regression for the reported bug: strict RFC 9728/8707 clients (Claude Code SDK)
+    # require the advertised resource to equal the dialed URL or its bare origin. Assert
+    # that equality explicitly, per distinct group, against the URL actually dialed.
+    env = AuthEnv(
+        client_id="cid",
+        client_secret="sec",
+        base_url="https://mcp.example.net",
+        jwt_signing_key="k" * 64,
+        encryption_key=None,
+        oauth_cache_dir=None,
+        static_bearer_tokens=None,
+        required_scopes=("openid", "email"),
+    )
+    plan = build_group_auth(["admin", "consumer"], env)
+    gw = build_from_config(_cfg(stub_backend), group_auth=plan)
+    app = gw.http_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="https://mcp.example.net", follow_redirects=True
+    ) as client:
+        for group in ("admin", "consumer"):
+            dialed_url = f"https://mcp.example.net/{group}/mcp"
+            resp = await client.post(
+                f"/{group}/mcp/",
+                headers={"Accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            )
+            assert resp.status_code == 401, group
+            wa = resp.headers["WWW-Authenticate"]
+            meta_url = wa.split('resource_metadata="')[1].split('"')[0]
+            meta = await client.get(meta_url)
+            resource = meta.json()["resource"]
+            dialed_origin = dialed_url.split("://", 1)[0] + "://" + dialed_url.split("/")[2]
+            assert resource.rstrip("/") == dialed_origin, group

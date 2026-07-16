@@ -62,11 +62,14 @@ Every group URL shares the **one** Google OAuth Authorization Server (one redire
 so any GCP test-user can authenticate; a group's separation is **possession of its URL**.
 An unauthenticated request to any `<base>/<group>/mcp` returns 401 with RFC 9728
 protected-resource metadata that resolves at the origin root and points at that single
-shared AS. (All groups share one protected-resource identity and audience: FastMCP's
-`OAuthProxy` is single-audience by construction, so a distinct per-group resource would
-mint an AS token the group rejects and loop the client through re-auth forever. Since any
-test-user can use any group URL anyway, a per-group resource identity would enforce
-nothing.) There is **no per-member enforcement in v1**: keep the test-user set tiny and
+shared AS. The advertised `resource` is the **bare origin** `<base>` (no `/mcp` suffix),
+so it satisfies strict RFC 9728/8707 clients that require the resource to equal the
+dialed URL or its origin (e.g. the Claude Code SDK), not just clients that match
+leniently on origin. (All groups share one protected-resource identity and audience:
+FastMCP's `OAuthProxy` is single-audience by construction, so a distinct per-group
+resource would mint an AS token the group rejects and loop the client through re-auth
+forever. Since any test-user can use any group URL anyway, a per-group resource identity
+would enforce nothing.) There is **no per-member enforcement in v1**: keep the test-user set tiny and
 trusted; use non-obvious group names if you want. Config reserves an optional `members:`
 list per group as the seam for a future post-auth membership check (returns 403 for
 non-members) that is additive, not a re-architecture.
